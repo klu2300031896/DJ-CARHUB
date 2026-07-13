@@ -8,6 +8,7 @@ import {
   getFirestore,
   onSnapshot,
   query,
+  serverTimestamp,
   where,
   writeBatch,
 } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
@@ -39,6 +40,8 @@ let bookingDocs = [];
 let lastCheck = null;
 let toastTimer = null;
 let hasSeededDefaultCars = false;
+let bookingModal = null;
+let pendingBookingCar = null;
 
 const availabilityForm = document.getElementById("availabilityForm");
 const startDateInput = document.getElementById("startDate");
@@ -149,7 +152,7 @@ function createFleetTag(item, disabledUntilSearch) {
   `;
 
   if (!disabledUntilSearch && !item.booked) {
-    button.addEventListener("click", () => bookAvailableCar(item.car));
+    button.addEventListener("click", () => openBookingDialog(item.car));
   }
 
   tag.appendChild(button);
@@ -166,9 +169,136 @@ async function hasBookingConflict(car, startDate, endDate) {
   });
 }
 
-async function bookAvailableCar(car) {
+function closeBookingDialog() {
+  if (bookingModal) {
+    bookingModal.remove();
+    bookingModal = null;
+  }
+  pendingBookingCar = null;
+}
+
+function showBookingDialog(car) {
+  closeBookingDialog();
+  pendingBookingCar = car;
+
+  const overlay = document.createElement("div");
+  overlay.style.position = "fixed";
+  overlay.style.inset = "0";
+  overlay.style.background = "rgba(0, 0, 0, 0.7)";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "center";
+  overlay.style.padding = "16px";
+  overlay.style.zIndex = "1000";
+
+  const dialog = document.createElement("div");
+  dialog.style.width = "min(420px, 100%)";
+  dialog.style.background = "#2b2f36";
+  dialog.style.border = "1px solid #3d424c";
+  dialog.style.borderRadius = "8px";
+  dialog.style.boxShadow = "0 16px 36px rgba(0, 0, 0, 0.28)";
+  dialog.style.padding = "22px";
+  dialog.style.color = "#ede7dc";
+
+  const title = document.createElement("h3");
+  title.textContent = `Book ${car}`;
+  title.style.margin = "0 0 12px";
+  title.style.fontFamily = '"Bebas Neue", sans-serif';
+  title.style.letterSpacing = "2px";
+  title.style.textTransform = "uppercase";
+
+  const description = document.createElement("p");
+  description.textContent = "Enter the customer mobile number to confirm the booking.";
+  description.style.margin = "0 0 16px";
+  description.style.color = "#a9aaa4";
+  description.style.fontFamily = '"IBM Plex Mono", monospace';
+  description.style.fontSize = "12px";
+  description.style.lineHeight = "1.5";
+
+  const form = document.createElement("form");
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const mobileInput = form.querySelector("input");
+    const mobile = mobileInput.value.trim();
+    const errorBox = form.querySelector(".dialog-error");
+
+    if (!/^\d{10}$/.test(mobile)) {
+      errorBox.textContent = "Please enter a valid 10-digit mobile number.";
+      errorBox.style.display = "block";
+      return;
+    }
+
+    submitBooking(car, mobile);
+  });
+
+  const input = document.createElement("input");
+  input.type = "tel";
+  input.inputMode = "numeric";
+  input.autocomplete = "tel";
+  input.placeholder = "9876543210";
+  input.required = true;
+  input.style.width = "100%";
+  input.style.minHeight = "42px";
+  input.style.padding = "10px 12px";
+  input.style.marginBottom = "10px";
+  input.style.color = "#20222a";
+  input.style.background = "#fbf9f2";
+  input.style.border = "1.5px solid #b7af98";
+  input.style.borderRadius = "4px";
+
+  const errorBox = document.createElement("div");
+  errorBox.className = "dialog-error";
+  errorBox.style.display = "none";
+  errorBox.style.marginBottom = "12px";
+  errorBox.style.color = "#e2574c";
+  errorBox.style.fontFamily = '"IBM Plex Mono", monospace';
+  errorBox.style.fontSize = "12px";
+
+  const actions = document.createElement("div");
+  actions.style.display = "flex";
+  actions.style.justifyContent = "flex-end";
+  actions.style.gap = "10px";
+  actions.style.marginTop = "8px";
+
+  const cancelButton = document.createElement("button");
+  cancelButton.type = "button";
+  cancelButton.textContent = "Cancel";
+  cancelButton.className = "button button-dark";
+  cancelButton.addEventListener("click", closeBookingDialog);
+
+  const confirmButton = document.createElement("button");
+  confirmButton.type = "submit";
+  confirmButton.textContent = "Confirm Booking";
+  confirmButton.className = "button button-amber";
+
+  actions.appendChild(cancelButton);
+  actions.appendChild(confirmButton);
+  form.appendChild(input);
+  form.appendChild(errorBox);
+  form.appendChild(actions);
+
+  dialog.appendChild(title);
+  dialog.appendChild(description);
+  dialog.appendChild(form);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  bookingModal = overlay;
+  input.focus();
+}
+
+function openBookingDialog(car) {
   if (!lastCheck) {
     showToast("Check availability before booking.", "error");
+    return;
+  }
+
+  showBookingDialog(car);
+}
+
+async function submitBooking(car, mobile) {
+  if (!lastCheck) {
+    showToast("Check availability before booking.", "error");
+    closeBookingDialog();
     return;
   }
 
@@ -176,6 +306,7 @@ async function bookAvailableCar(car) {
     const conflictExists = await hasBookingConflict(car, lastCheck.start, lastCheck.end);
     if (conflictExists) {
       showToast(`${car} is already booked during this period.`, "error");
+      closeBookingDialog();
       renderFleetStatus();
       return;
     }
@@ -184,8 +315,11 @@ async function bookAvailableCar(car) {
       car,
       start: lastCheck.start,
       end: lastCheck.end,
+      mobile,
+      bookedAt: serverTimestamp(),
     });
 
+    closeBookingDialog();
     showToast(
       `Booked ${car} from ${formatDate(lastCheck.start)} to ${formatDate(lastCheck.end)}.`,
       "success"
@@ -228,6 +362,11 @@ function getBookingRows() {
 }
 
 function renderBookings() {
+  const bookingHead = document.querySelector(".booking-head");
+  if (bookingHead) {
+    bookingHead.style.gridTemplateColumns = "1.4fr 1fr 1fr 1.2fr auto";
+  }
+
   const rows = getBookingRows();
   bookingList.innerHTML = "";
 
@@ -242,11 +381,34 @@ function renderBookings() {
   rows.forEach((row) => {
     const bookingRow = document.createElement("div");
     bookingRow.className = "booking-row";
-    bookingRow.innerHTML = `
-      <span>${escapeHtml(row.car)}</span>
-      <span>${formatDate(row.start)}</span>
-      <span>${formatDate(row.end)}</span>
-    `;
+    bookingRow.style.gridTemplateColumns = "1.4fr 1fr 1fr 1.2fr auto";
+
+    const carCell = document.createElement("span");
+    carCell.textContent = row.car;
+
+    const startCell = document.createElement("span");
+    startCell.textContent = formatDate(row.start);
+
+    const endCell = document.createElement("div");
+    endCell.style.display = "grid";
+    endCell.style.gap = "4px";
+
+    const endDate = document.createElement("span");
+    endDate.textContent = formatDate(row.end);
+
+    const mobileLink = document.createElement("a");
+    const mobileValue = row.mobile || "—";
+    mobileLink.href = mobileValue === "—" ? "#" : `tel:${mobileValue}`;
+    mobileLink.textContent = mobileValue === "—" ? "No mobile" : `📞 ${mobileValue}`;
+    mobileLink.style.color = "#f5b942";
+    mobileLink.style.textDecoration = "none";
+    mobileLink.style.fontWeight = "600";
+    if (mobileValue !== "—") {
+      mobileLink.setAttribute("aria-label", `Call ${mobileValue}`);
+    }
+
+    endCell.appendChild(endDate);
+    endCell.appendChild(mobileLink);
 
     const removeButton = document.createElement("button");
     removeButton.className = "button button-danger row-remove";
@@ -254,6 +416,10 @@ function renderBookings() {
     removeButton.textContent = "Remove";
     removeButton.addEventListener("click", () => removeBooking(row.id));
 
+    bookingRow.appendChild(carCell);
+    bookingRow.appendChild(startCell);
+    bookingRow.appendChild(endCell);
+    bookingRow.appendChild(document.createElement("span"));
     bookingRow.appendChild(removeButton);
     bookingList.appendChild(bookingRow);
   });
@@ -407,6 +573,7 @@ function subscribeToBookings() {
             car: String(booking.car || "").trim(),
             start: String(booking.start || "").trim(),
             end: String(booking.end || "").trim(),
+            mobile: String(booking.mobile || "").trim(),
           };
         })
         .filter(
