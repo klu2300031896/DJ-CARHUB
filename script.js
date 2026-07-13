@@ -1,26 +1,25 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
-
 import {
-  getFirestore,
-  collection,
   addDoc,
-  getDocs,
+  collection,
   deleteDoc,
-  doc
+  doc,
+  getDocs,
+  getFirestore,
+  onSnapshot,
+  query,
+  where,
+  writeBatch,
 } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+
 const firebaseConfig = {
   apiKey: "AIzaSyAZYNpeWaySvGjudGow69fFUSclOY6cym8",
   authDomain: "dj-carhub.firebaseapp.com",
   projectId: "dj-carhub",
   storageBucket: "dj-carhub.firebasestorage.app",
   messagingSenderId: "110250312236",
-  appId: "1:110250312236:web:a43365ad67a52cff3f0789"
+  appId: "1:110250312236:web:a43365ad67a52cff3f0789",
 };
-
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-
-console.log("✅ Firebase Connected!");
 
 const DEFAULT_CARS = [
   "Toyota Innova",
@@ -30,15 +29,16 @@ const DEFAULT_CARS = [
   "Kia Seltos",
 ];
 
-const STORAGE_KEYS = {
-  cars: "carAvailabilityChecker.cars",
-  bookings: "carAvailabilityChecker.bookings",
-};
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const carsCollection = collection(db, "cars");
+const bookingsCollection = collection(db, "bookings");
 
-let cars = loadCars();
-let bookings = loadBookings();
+let carDocs = [];
+let bookingDocs = [];
 let lastCheck = null;
 let toastTimer = null;
+let hasSeededDefaultCars = false;
 
 const availabilityForm = document.getElementById("availabilityForm");
 const startDateInput = document.getElementById("startDate");
@@ -52,71 +52,8 @@ const removeCarSelect = document.getElementById("removeCarSelect");
 const bookingList = document.getElementById("bookingList");
 const toast = document.getElementById("toast");
 
-function loadCars() {
-  const savedCars = readJson(STORAGE_KEYS.cars, null);
-  if (!Array.isArray(savedCars)) {
-    return [...DEFAULT_CARS];
-  }
-
-  const cleanCars = [];
-  savedCars.forEach((car) => {
-    const name = String(car).trim();
-    if (name && !cleanCars.includes(name)) {
-      cleanCars.push(name);
-    }
-  });
-
-  return cleanCars.length ? cleanCars : [...DEFAULT_CARS];
-}
-
-async function loadBookings() {
-
-    const snapshot = await getDocs(collection(db, "bookings"));
-
-    const data = {};
-
-    cars.forEach(car => data[car] = []);
-
-    snapshot.forEach(document => {
-
-        const booking = document.data();
-
-        if (!data[booking.car])
-            data[booking.car] = [];
-
-        data[booking.car].push([
-            booking.start,
-            booking.end
-        ]);
-
-    });
-
-    bookings = data;
-}
-
-function readJson(key, fallback) {
-  try {
-    const value = localStorage.getItem(key);
-    return value ? JSON.parse(value) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-
-
-function syncBookingsToCars() {
-  cars.forEach((car) => {
-    if (!Array.isArray(bookings[car])) {
-      bookings[car] = [];
-    }
-  });
-
-  Object.keys(bookings).forEach((car) => {
-    if (!cars.includes(car)) {
-      delete bookings[car];
-    }
-  });
+function getCarNames() {
+  return carDocs.map((car) => car.name);
 }
 
 function isIsoDate(value) {
@@ -140,13 +77,15 @@ function rangesOverlap(selectedStart, selectedEnd, bookedStart, bookedEnd) {
 }
 
 function isCarBooked(car, startDate, endDate) {
-  return (bookings[car] || []).some(([bookedStart, bookedEnd]) =>
-    rangesOverlap(startDate, endDate, bookedStart, bookedEnd)
+  return bookingDocs.some(
+    (booking) =>
+      booking.car === car &&
+      rangesOverlap(startDate, endDate, booking.start, booking.end)
   );
 }
 
 function getFleetStatus(startDate, endDate) {
-  return cars.map((car) => ({
+  return getCarNames().map((car) => ({
     car,
     booked: isCarBooked(car, startDate, endDate),
   }));
@@ -171,7 +110,7 @@ function renderFleetStatus() {
 
   if (!lastCheck) {
     rangeNote.textContent = "Select a date range to view fleet status.";
-    cars.forEach((car) => {
+    getCarNames().forEach((car) => {
       fleetGrid.appendChild(createFleetTag({ car, booked: false }, true));
     });
     return;
@@ -217,35 +156,49 @@ function createFleetTag(item, disabledUntilSearch) {
   return tag;
 }
 
-function bookAvailableCar(car) {
+async function hasBookingConflict(car, startDate, endDate) {
+  const bookingQuery = query(bookingsCollection, where("car", "==", car));
+  const snapshot = await getDocs(bookingQuery);
+
+  return snapshot.docs.some((bookingDoc) => {
+    const booking = bookingDoc.data();
+    return rangesOverlap(startDate, endDate, booking.start, booking.end);
+  });
+}
+
+async function bookAvailableCar(car) {
   if (!lastCheck) {
     showToast("Check availability before booking.", "error");
     return;
   }
 
-  if (isCarBooked(car, lastCheck.start, lastCheck.end)) {
-    showToast(`${car} is already booked during this period.`, "error");
-    renderFleetStatus();
-    return;
+  try {
+    const conflictExists = await hasBookingConflict(car, lastCheck.start, lastCheck.end);
+    if (conflictExists) {
+      showToast(`${car} is already booked during this period.`, "error");
+      renderFleetStatus();
+      return;
+    }
+
+    await addDoc(bookingsCollection, {
+      car,
+      start: lastCheck.start,
+      end: lastCheck.end,
+    });
+
+    showToast(
+      `Booked ${car} from ${formatDate(lastCheck.start)} to ${formatDate(lastCheck.end)}.`,
+      "success"
+    );
+  } catch (error) {
+    console.error("Error booking car:", error);
+    showToast("Could not save this booking. Check Firebase permissions.", "error");
   }
-
-  await addDoc(collection(db, "bookings"), {
-
-    car: car,
-
-    start: lastCheck.start,
-
-    end: lastCheck.end
-
-});
-
-await loadBookings();
-  renderAll();
-  showToast(`Booked ${car} from ${formatDate(lastCheck.start)} to ${formatDate(lastCheck.end)}.`, "success");
 }
 
 function renderCarSelect() {
   removeCarSelect.innerHTML = "";
+  const cars = getCarNames();
 
   if (!cars.length) {
     const option = document.createElement("option");
@@ -266,13 +219,12 @@ function renderCarSelect() {
 }
 
 function getBookingRows() {
-  return Object.keys(bookings)
-    .sort()
-    .flatMap((car) =>
-      [...bookings[car]]
-        .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]))
-        .map(([start, end]) => ({ car, start, end }))
-    );
+  return [...bookingDocs].sort(
+    (a, b) =>
+      a.car.localeCompare(b.car) ||
+      a.start.localeCompare(b.start) ||
+      a.end.localeCompare(b.end)
+  );
 }
 
 function renderBookings() {
@@ -300,65 +252,84 @@ function renderBookings() {
     removeButton.className = "button button-danger row-remove";
     removeButton.type = "button";
     removeButton.textContent = "Remove";
-    removeButton.addEventListener("click", () => removeBooking(row.car, row.start, row.end));
+    removeButton.addEventListener("click", () => removeBooking(row.id));
 
     bookingRow.appendChild(removeButton);
     bookingList.appendChild(bookingRow);
   });
 }
 
-function removeBooking(car, startDate, endDate) {
-  const ranges = bookings[car] || [];
-  const index = ranges.findIndex(([start, end]) => start === startDate && end === endDate);
-
-  if (index === -1) {
-    showToast("Could not remove that booking. Refresh and try again.", "error");
-    return;
+async function removeBooking(bookingId) {
+  try {
+    await deleteDoc(doc(db, "bookings", bookingId));
+    showToast("Removed booking.", "success");
+  } catch (error) {
+    console.error("Error removing booking:", error);
+    showToast("Could not remove that booking. Check Firebase permissions.", "error");
   }
-
-  ranges.splice(index, 1);
-  
-  renderAll();
-  showToast(`Removed booking for ${car}.`, "success");
 }
 
-function addCar(name) {
+async function addCar(name) {
   const cleanName = name.trim();
-  const exists = cars.some((car) => car.toLowerCase() === cleanName.toLowerCase());
+  const existsInState = getCarNames().some(
+    (car) => car.toLowerCase() === cleanName.toLowerCase()
+  );
 
   if (!cleanName) {
     showToast("Enter a car name.", "error");
     return;
   }
 
-  if (exists) {
+  if (existsInState) {
     showToast(`${cleanName} already exists in the fleet.`, "error");
     return;
   }
 
-  cars.push(cleanName);
-  bookings[cleanName] = [];
-  
-  newCarNameInput.value = "";
-  renderAll();
-  showToast(`Added ${cleanName}.`, "success");
+  try {
+    const duplicateQuery = query(carsCollection, where("name", "==", cleanName));
+    const duplicateSnapshot = await getDocs(duplicateQuery);
+    if (!duplicateSnapshot.empty) {
+      showToast(`${cleanName} already exists in the fleet.`, "error");
+      return;
+    }
+
+    await addDoc(carsCollection, { name: cleanName });
+    newCarNameInput.value = "";
+    showToast(`Added ${cleanName}.`, "success");
+  } catch (error) {
+    console.error("Error adding car:", error);
+    showToast("Could not add this car. Check Firebase permissions.", "error");
+  }
 }
 
-function removeCar(car) {
-  if (!car || !cars.includes(car)) {
+async function removeCar(car) {
+  if (!car || !getCarNames().includes(car)) {
     showToast("Select a car to remove.", "error");
     return;
   }
 
-  cars = cars.filter((item) => item !== car);
-  delete bookings[car];
- 
-  renderAll();
-  showToast(`Removed ${car}.`, "success");
+  try {
+    const batch = writeBatch(db);
+    const matchingCars = carDocs.filter((carDoc) => carDoc.name === car);
+    matchingCars.forEach((carDoc) => {
+      batch.delete(doc(db, "cars", carDoc.id));
+    });
+
+    const relatedBookingsQuery = query(bookingsCollection, where("car", "==", car));
+    const relatedBookings = await getDocs(relatedBookingsQuery);
+    relatedBookings.forEach((bookingDoc) => {
+      batch.delete(doc(db, "bookings", bookingDoc.id));
+    });
+
+    await batch.commit();
+    showToast(`Removed ${car}.`, "success");
+  } catch (error) {
+    console.error("Error removing car:", error);
+    showToast("Could not remove this car. Check Firebase permissions.", "error");
+  }
 }
 
 function renderAll() {
-  syncBookingsToCars();
   renderFleetStatus();
   renderCarSelect();
   renderBookings();
@@ -380,6 +351,79 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+async function seedDefaultCarsIfNeeded() {
+  if (hasSeededDefaultCars || carDocs.length) {
+    return;
+  }
+
+  hasSeededDefaultCars = true;
+
+  try {
+    const batch = writeBatch(db);
+    DEFAULT_CARS.forEach((name) => {
+      const carRef = doc(carsCollection);
+      batch.set(carRef, { name });
+    });
+    await batch.commit();
+  } catch (error) {
+    console.error("Error seeding default cars:", error);
+    showToast("Could not create default cars. Check Firebase permissions.", "error");
+  }
+}
+
+function subscribeToCars() {
+  onSnapshot(
+    carsCollection,
+    async (snapshot) => {
+      carDocs = snapshot.docs
+        .map((carDoc) => ({
+          id: carDoc.id,
+          name: String(carDoc.data().name || "").trim(),
+        }))
+        .filter((car) => car.name)
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+      await seedDefaultCarsIfNeeded();
+      renderAll();
+    },
+    (error) => {
+      console.error("Cars listener failed:", error);
+      showToast("Could not load cars from Firebase.", "error");
+    }
+  );
+}
+
+function subscribeToBookings() {
+  onSnapshot(
+    bookingsCollection,
+    (snapshot) => {
+      bookingDocs = snapshot.docs
+        .map((bookingDoc) => {
+          const booking = bookingDoc.data();
+          return {
+            id: bookingDoc.id,
+            car: String(booking.car || "").trim(),
+            start: String(booking.start || "").trim(),
+            end: String(booking.end || "").trim(),
+          };
+        })
+        .filter(
+          (booking) =>
+            booking.car &&
+            isIsoDate(booking.start) &&
+            isIsoDate(booking.end) &&
+            booking.start <= booking.end
+        );
+
+      renderAll();
+    },
+    (error) => {
+      console.error("Bookings listener failed:", error);
+      showToast("Could not load bookings from Firebase.", "error");
+    }
+  );
 }
 
 availabilityForm.addEventListener("submit", (event) => {
@@ -409,23 +453,9 @@ function initialize() {
   const today = todayIso();
   startDateInput.value = today;
   endDateInput.value = today;
-  syncBookingsToCars();
-  
   renderAll();
-}
-
-async function initialize(){
-
-    const today = todayIso();
-
-    startDateInput.value = today;
-
-    endDateInput.value = today;
-
-    await loadBookings();
-
-    renderAll();
-
+  subscribeToCars();
+  subscribeToBookings();
 }
 
 initialize();
