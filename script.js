@@ -1,3 +1,27 @@
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  getDocs,
+  deleteDoc,
+  doc
+} from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+const firebaseConfig = {
+  apiKey: "AIzaSyAZYNpeWaySvGjudGow69fFUSclOY6cym8",
+  authDomain: "dj-carhub.firebaseapp.com",
+  projectId: "dj-carhub",
+  storageBucket: "dj-carhub.firebasestorage.app",
+  messagingSenderId: "110250312236",
+  appId: "1:110250312236:web:a43365ad67a52cff3f0789"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+console.log("✅ Firebase Connected!");
+
 const DEFAULT_CARS = [
   "Toyota Innova",
   "Hyundai Creta",
@@ -45,27 +69,29 @@ function loadCars() {
   return cleanCars.length ? cleanCars : [...DEFAULT_CARS];
 }
 
-function loadBookings() {
-  const savedBookings = readJson(STORAGE_KEYS.bookings, {});
-  const cleanBookings = {};
+async function loadBookings() {
 
-  cars.forEach((car) => {
-    cleanBookings[car] = [];
-    const ranges = Array.isArray(savedBookings[car]) ? savedBookings[car] : [];
+    const snapshot = await getDocs(collection(db, "bookings"));
 
-    ranges.forEach((range) => {
-      if (!Array.isArray(range) || range.length !== 2) {
-        return;
-      }
+    const data = {};
 
-      const [start, end] = range;
-      if (isIsoDate(start) && isIsoDate(end) && start <= end) {
-        cleanBookings[car].push([start, end]);
-      }
+    cars.forEach(car => data[car] = []);
+
+    snapshot.forEach(document => {
+
+        const booking = document.data();
+
+        if (!data[booking.car])
+            data[booking.car] = [];
+
+        data[booking.car].push([
+            booking.start,
+            booking.end
+        ]);
+
     });
-  });
 
-  return cleanBookings;
+    bookings = data;
 }
 
 function readJson(key, fallback) {
@@ -77,10 +103,7 @@ function readJson(key, fallback) {
   }
 }
 
-function saveState() {
-  localStorage.setItem(STORAGE_KEYS.cars, JSON.stringify(cars));
-  localStorage.setItem(STORAGE_KEYS.bookings, JSON.stringify(bookings));
-}
+
 
 function syncBookingsToCars() {
   cars.forEach((car) => {
@@ -206,8 +229,17 @@ function bookAvailableCar(car) {
     return;
   }
 
-  bookings[car].push([lastCheck.start, lastCheck.end]);
-  saveState();
+  await addDoc(collection(db, "bookings"), {
+
+    car: car,
+
+    start: lastCheck.start,
+
+    end: lastCheck.end
+
+});
+
+await loadBookings();
   renderAll();
   showToast(`Booked ${car} from ${formatDate(lastCheck.start)} to ${formatDate(lastCheck.end)}.`, "success");
 }
@@ -285,7 +317,7 @@ function removeBooking(car, startDate, endDate) {
   }
 
   ranges.splice(index, 1);
-  saveState();
+  
   renderAll();
   showToast(`Removed booking for ${car}.`, "success");
 }
@@ -306,7 +338,7 @@ function addCar(name) {
 
   cars.push(cleanName);
   bookings[cleanName] = [];
-  saveState();
+  
   newCarNameInput.value = "";
   renderAll();
   showToast(`Added ${cleanName}.`, "success");
@@ -320,7 +352,7 @@ function removeCar(car) {
 
   cars = cars.filter((item) => item !== car);
   delete bookings[car];
-  saveState();
+ 
   renderAll();
   showToast(`Removed ${car}.`, "success");
 }
@@ -378,8 +410,22 @@ function initialize() {
   startDateInput.value = today;
   endDateInput.value = today;
   syncBookingsToCars();
-  saveState();
+  
   renderAll();
+}
+
+async function initialize(){
+
+    const today = todayIso();
+
+    startDateInput.value = today;
+
+    endDateInput.value = today;
+
+    await loadBookings();
+
+    renderAll();
+
 }
 
 initialize();
