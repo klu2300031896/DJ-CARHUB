@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Car Availability Checker</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="header">
+      <div>
+        <div class="plate" aria-label="DJ CARHUB">
+          <span class="bolt"></span>
+          <span class="plate-text">DJ CARHUB</span>
+          <span class="bolt"></span>
+        </div>
+        <p class="subhead">Car availability - single owner</p>
+      </div>
+      <div class="system-status">
+        <span class="bulb" aria-hidden="true"></span>
+        <span>System online</span>
+      </div>
+    </header>
+
+    <section class="section">
+      <h1 class="section-label">Check a date range</h1>
+      <div class="ticket">
+        <form id="availabilityForm" class="ticket-row">
+          <label class="field">
+            <span>Start date</span>
+            <input type="date" id="startDate" required>
+          </label>
+          <label class="field">
+            <span>End date</span>
+            <input type="date" id="endDate" required>
+          </label>
+          <button class="button button-dark" type="submit">Check availability</button>
+        </form>
+        <div class="ticket-foot">Ticket no. 0417 - valid for selected range only</div>
+      </div>
+    </section>
+
+    <section class="section" id="fleetSection">
+      <h2 class="section-label">Fleet status</h2>
+      <div class="range-note" id="rangeNote">Select a date range to view fleet status.</div>
+      <div class="pegboard">
+        <div class="fleet-grid" id="fleetGrid"></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-label">Manage cars</h2>
+      <div class="management-grid">
+        <form id="addCarForm" class="panel">
+          <h3>Add car</h3>
+          <label class="field field-stacked">
+            <span>New car name</span>
+            <input type="text" id="newCarName" placeholder="Example: Maruti Ertiga" autocomplete="off">
+          </label>
+          <button class="button button-amber" type="submit">Add car</button>
+        </form>
+
+        <form id="removeCarForm" class="panel">
+          <h3>Remove car</h3>
+          <label class="field field-stacked">
+            <span>Car</span>
+            <select id="removeCarSelect"></select>
+          </label>
+          <button class="button button-danger" type="submit">Remove car</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2 class="section-label">Current bookings</h2>
+      <div class="logsheet">
+        <div class="booking-head">
+          <span>Car</span>
+          <span>From</span>
+          <span>To</span>
+          <span></span>
+        </div>
+        <div id="bookingList"></div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="script.js"></script>
+</body>
+</html>
